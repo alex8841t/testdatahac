@@ -21,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. CONFIGURATION ---
-DATA_FOLDER = r'.\passmaps\data'
+DATA_FOLDER = r'.\data'
 
 def get_available_files():
     if not os.path.exists(DATA_FOLDER):
@@ -218,4 +218,5 @@ if df is not None:
         fig.add_trace(go.Scatter(x=df_ast['endX'], y=df_ast['endY'], mode='markers', name='Assists', marker=dict(size=12, color='#00BFFF', symbol='diamond', line=dict(width=1, color='white')), text=df_ast['receiver'], hovertemplate="<b>🅰️ ASSIST</b><br>%{text}<br>%{customdata}'<extra></extra>", customdata=df_ast['minute']))
 
     st.plotly_chart(fig, use_container_width=True)
+
     st.markdown('<div class="site-footer">Data Visualization by @alex8841t</div>', unsafe_allow_html=True)
