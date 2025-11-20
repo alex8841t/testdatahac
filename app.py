@@ -3,8 +3,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import os
 import base64
+import numpy as np
+from scipy.stats import gaussian_kde # Import ajouté pour la heatmap lissée
 
-st.set_page_config(page_title="Pass Map HAC", layout="wide")
+st.set_page_config(page_title="Analyse HAC", layout="wide")
 
 # --- CSS : ESTHÉTIQUE ---
 st.markdown("""
@@ -20,15 +22,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 1. CONFIGURATION ROBUSTE (Compatible Cloud & Local) ---
-import os
-
-# Récupère le dossier où se trouve physiquement le fichier app.py
-current_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Construit le chemin vers le dossier 'data' situé au même endroit que app.py
-# Cela marche sur Windows, Mac et Linux (Streamlit Cloud)
-DATA_FOLDER = os.path.join(current_dir, 'data')
+# --- 1. CONFIGURATION ---
+DATA_FOLDER = r'.\data' # Assurez-vous que ce chemin est correct
 
 def get_available_files():
     if not os.path.exists(DATA_FOLDER):
@@ -59,14 +54,18 @@ def get_local_logo():
 def load_data(file_path):
     try:
         df = pd.read_csv(file_path)
-        if df.shape[1] < 2:
+        # Tente de lire avec un séparateur ';' si la première tentative échoue
+        if df.shape[1] < 2: # Si le CSV n'a qu'une colonne, c'est probablement un problème de séparateur
             df = pd.read_csv(file_path, sep=';')
         return df
-    except: return None
+    except Exception as e:
+        st.error(f"Erreur lors du chargement du fichier CSV : {e}")
+        return None
 
 # --- 2. LOGIQUE TACTIQUE ---
 def calculate_progressive(df):
-    if 'prog_pass' not in df.columns or 'qualifiers' not in df.columns:
+    # Vérifie si les colonnes nécessaires existent
+    if 'prog_pass' not in df.columns or 'qualifiers' not in df.columns or 'x' not in df.columns or 'endX' not in df.columns:
         return pd.Series([False] * len(df), index=df.index)
 
     q_str = df['qualifiers'].astype(str)
@@ -78,13 +77,25 @@ def calculate_progressive(df):
     
     return (is_standard | is_long_prog) & is_forward
 
-def get_stats(df_player):
-    total = len(df_player)
-    success = len(df_player[df_player['outcomeType'] == 'Successful'])
-    q_str = df_player['qualifiers'].astype(str)
+def get_stats(df_player_passes):
+    # S'assure que df_player_passes contient les colonnes nécessaires
+    if df_player_passes.empty:
+        return 0, 0, 0, 0, 0
+    
+    total = len(df_player_passes)
+    success = len(df_player_passes[df_player_passes['outcomeType'] == 'Successful'])
+    
+    # Assure que 'qualifiers' est une chaîne de caractères pour les opérations str
+    q_str = df_player_passes['qualifiers'].astype(str)
     key = q_str.str.contains('KeyPass', case=False, regex=False).sum()
     ast = q_str.str.contains('GoalAssist', case=False, regex=False).sum()
-    prog = len(df_player[df_player['is_progressive'] & (df_player['outcomeType'] == 'Successful')])
+    
+    # S'assure que 'is_progressive' existe avant de filtrer
+    if 'is_progressive' in df_player_passes.columns:
+        prog = len(df_player_passes[df_player_passes['is_progressive'] & (df_player_passes['outcomeType'] == 'Successful')])
+    else:
+        prog = 0 # Ou recalculer si nécessaire
+        
     return total, success, key, ast, prog
 
 def create_uefa_pitch():
@@ -109,7 +120,7 @@ with st.sidebar:
     st.header("⚽ Analyse HAC")
     files = get_available_files()
     if not files:
-        st.error(f"Aucun CSV trouvé dans `{DATA_FOLDER}`.")
+        st.error(f"Aucun fichier CSV trouvé dans `{DATA_FOLDER}`. Veuillez placer vos fichiers de données dans ce dossier.")
         st.stop()
     
     selected_file = st.selectbox("Match", files, format_func=lambda x: x.replace(".csv", ""))
@@ -117,27 +128,38 @@ with st.sidebar:
     df = load_data(file_path)
 
     if df is not None:
+        # Filtrage pour l'équipe du HAC si la colonne 'teamName' existe
         if 'teamName' in df.columns:
             df_hac = df[df['teamName'] == 'Le Havre']
-            pool = df_hac if not df_hac.empty else df
-        else: pool = df
+            pool = df_hac if not df_hac.empty else df # Utilise df_hac si non vide, sinon tout le df
+        else: 
+            pool = df # Si pas de colonne teamName, utilise tout le df
         
-        plist = sorted(pool['name'].dropna().unique())
-        player_name = st.selectbox("Joueur", plist, index=0)
+        # S'assure que la colonne 'name' existe et n'est pas vide
+        if 'name' in pool.columns and not pool['name'].dropna().empty:
+            plist = sorted(pool['name'].dropna().unique())
+            player_name = st.selectbox("Joueur", plist, index=0)
+        else:
+            st.warning("La colonne 'name' est manquante ou vide dans le fichier de données. Impossible de sélectionner un joueur.")
+            st.stop()
         
+        # Ajout de la sélection Pass Map / Heatmap
+        viz_type = st.radio("Type de visualisation", ["Pass Map", "Heatmap"], horizontal=True)
+
         st.divider()
-        st.subheader("Filtres")
-        f_success = st.checkbox("✅ Passes Réussies", value=False)
-        f_prog = st.checkbox("🚀 Progressives", value=False)
+        st.subheader("Filtres (pour Pass Map uniquement)")
+        f_success = st.checkbox("✅ Passes Réussies", value=False, disabled=(viz_type == "Heatmap"))
+        f_prog = st.checkbox("🚀 Progressives", value=False, disabled=(viz_type == "Heatmap"))
 
 # --- 4. VISUALISATION ---
-if df is not None:
+if df is not None and player_name: # S'assure que df et player_name sont définis
+    # Préparation des données pour les statistiques (uniquement les passes)
     df_p = df[(df['name'] == player_name) & (df['type'] == 'Pass')].copy()
-    df_p['is_progressive'] = calculate_progressive(df_p)
-    
-    q_str = df_p['qualifiers'].astype(str)
-    df_p['is_assist'] = q_str.str.contains('GoalAssist', case=False, regex=False)
-    df_p['is_keypass'] = q_str.str.contains('KeyPass', case=False, regex=False) & ~df_p['is_assist']
+    if not df_p.empty:
+        df_p['is_progressive'] = calculate_progressive(df_p)
+        q_str = df_p['qualifiers'].astype(str)
+        df_p['is_assist'] = q_str.str.contains('GoalAssist', case=False, regex=False)
+        df_p['is_keypass'] = q_str.str.contains('KeyPass', case=False, regex=False) & ~df_p['is_assist']
     
     tot, suc, key, ast, prog = get_stats(df_p)
     pct = (suc / tot * 100) if tot > 0 else 0
@@ -149,81 +171,180 @@ if df is not None:
     c3.metric("Décisives", ast)
     c4.metric("Progressives", prog)
 
-    df_viz = df_p.copy()
-    if f_success: df_viz = df_viz[df_viz['outcomeType'] == 'Successful']
-    if f_prog: df_viz = df_viz[df_viz['is_progressive']]
-
-    receivers = []
-    for i, row in df_viz.iterrows():
-        try:
-            nxt = df.loc[i + 1]
-            receivers.append(nxt['name'] if nxt['teamId'] == row['teamId'] else "Perte")
-        except: receivers.append("-")
-    df_viz['receiver'] = receivers
-
-    shapes, length, width = create_uefa_pitch()
+    shapes, length, width = create_uefa_pitch() # Définir shapes, length, width ici pour les deux visualisations
     
-    layout = go.Layout(
-        shapes=shapes,
-        plot_bgcolor="#1e1e1e", paper_bgcolor="#1e1e1e",
-        xaxis=dict(visible=False, range=[-1, length+1], fixedrange=True),
-        yaxis=dict(visible=False, range=[-1, width+1], fixedrange=True, scaleanchor="x", scaleratio=1),
-        # MARGE RÉDUITE + HAUTEUR AUGMENTÉE (800px)
-        margin=dict(l=5, r=5, t=40, b=5),
-        height=800, 
-        showlegend=True,
-        legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center", font=dict(color="white"), bgcolor="rgba(0,0,0,0)", itemclick=False, itemdoubleclick=False)
-    )
-    
-    fig = go.Figure(layout=layout)
-    
-    logo_base64 = get_local_logo()
-    if logo_base64:
-        fig.add_layout_image(dict(
-            source=logo_base64, xref="x", yref="y", x=2, y=2, sizex=12, sizey=12,
-            opacity=0.3, layer="below", sizing="contain", xanchor="left", yanchor="bottom"
-        ))
-    else:
-        fig.add_annotation(text="Logo introuvable", x=2, y=2, showarrow=False, font=dict(color="gray"))
+    # --- Logique de visualisation conditionnelle ---
+    if viz_type == "Heatmap":
+        # On prend toutes les actions du joueur (pas seulement les passes)
+        df_actions = df[df['name'] == player_name].copy()
+        # On retire les actions sans coordonnées ou avec des coordonnées non valides
+        df_actions = df_actions.dropna(subset=['x', 'y'])
+        
+        # Convertir en float et filtrer les valeurs hors limites du terrain
+        x_coords = df_actions['x'].astype(float)
+        y_coords = df_actions['y'].astype(float)
+        
+        # Filtrer les coordonnées pour qu'elles soient dans les limites du terrain
+        x_coords = x_coords[(x_coords >= 0) & (x_coords <= length)]
+        y_coords = y_coords[(y_coords >= 0) & (y_coords <= width)]
 
-    fig.add_annotation(
-        text="<i>Viz by @alex8841t</i>",
-        xref="x", yref="y", x=length - 2, y=2, showarrow=False,
-        xanchor="right", yanchor="bottom",
-        font=dict(color="rgba(255,255,255,0.6)", size=16, family="Montserrat")
-    )
+        fig = go.Figure()
 
-    # TRACES : On utilise endX / endY pour les marqueurs
-    df_no = df_viz[df_viz['outcomeType'] != 'Successful']
-    df_ok = df_viz[df_viz['outcomeType'] == 'Successful']
-    df_ast = df_ok[df_ok['is_assist']]
-    df_kp = df_ok[df_ok['is_keypass']]
-    df_nrm = df_ok[~df_ok['is_assist'] & ~df_ok['is_keypass']]
+        # Kernel Density Estimation pour une heatmap lissée
+        # Nécessite au moins 2 points pour calculer la densité
+        if len(x_coords) > 1 and len(y_coords) > 1:
+            # Créer une grille régulière sur le terrain
+            # Ajuster la résolution (200j, 130j) si besoin pour plus de finesse ou de performance
+            xi, yi = np.mgrid[0:length:200j, 0:width:130j]
+            
+            # Calcul de la densité
+            try:
+                # MODIFICATION ICI : bw_method ajusté pour moins de flou.
+                # Tu peux expérimenter avec des valeurs comme 0.05, 0.08, 0.12, etc.
+                # 0.1 est un bon compromis pour un rendu plus net.
+                kde = gaussian_kde(np.vstack([x_coords, y_coords]), bw_method=0.2) 
+                zi = kde(np.vstack([xi.flatten(), yi.flatten()]))
 
-    # Ratées
-    if not df_no.empty:
-        for _, r in df_no.iterrows():
-            fig.add_trace(go.Scatter(x=[r['x'], r['endX']], y=[r['y'], r['endY']], mode='lines', line=dict(color='#ef553b', width=1, dash='dot'), opacity=0.5, showlegend=False, hoverinfo='skip'))
-        fig.add_trace(go.Scatter(x=df_no['endX'], y=df_no['endY'], mode='markers', name='Ratées', marker=dict(size=6, color='#1e1e1e', symbol='x', line=dict(width=1, color='#ef553b')), text=df_no['receiver'], hovertemplate="<b>Perte</b><br>%{customdata}'<extra></extra>", customdata=df_no['minute']))
-    
-    # Normales
-    if not df_nrm.empty:
-        for _, r in df_nrm.iterrows():
-            fig.add_trace(go.Scatter(x=[r['x'], r['endX']], y=[r['y'], r['endY']], mode='lines', line=dict(color='#00cc96', width=2), opacity=0.6, showlegend=False, hoverinfo='skip'))
-        fig.add_trace(go.Scatter(x=df_nrm['endX'], y=df_nrm['endY'], mode='markers', name='Réussies', marker=dict(size=6, color='#1e1e1e', line=dict(width=1, color='#00cc96')), text=df_nrm['receiver'], hovertemplate="<b>%{text}</b><br>%{customdata}'<extra></extra>", customdata=df_nrm['minute']))
-    
-    # Clés
-    if not df_kp.empty:
-        for _, r in df_kp.iterrows():
-            fig.add_trace(go.Scatter(x=[r['x'], r['endX']], y=[r['y'], r['endY']], mode='lines', line=dict(color='#FFD700', width=3), opacity=0.9, showlegend=False, hoverinfo='skip'))
-        fig.add_trace(go.Scatter(x=df_kp['endX'], y=df_kp['endY'], mode='markers', name='Passes Clés', marker=dict(size=10, color='#FFD700', symbol='star', line=dict(width=1, color='white')), text=df_kp['receiver'], hovertemplate="<b>🔑 Clé</b><br>%{text}<br>%{customdata}'<extra></extra>", customdata=df_kp['minute']))
-    
-    # Décisives
-    if not df_ast.empty:
-        for _, r in df_ast.iterrows():
-            fig.add_trace(go.Scatter(x=[r['x'], r['endX']], y=[r['y'], r['endY']], mode='lines', line=dict(color='#00BFFF', width=4), opacity=1, showlegend=False, hoverinfo='skip'))
-        fig.add_trace(go.Scatter(x=df_ast['endX'], y=df_ast['endY'], mode='markers', name='Assists', marker=dict(size=12, color='#00BFFF', symbol='diamond', line=dict(width=1, color='white')), text=df_ast['receiver'], hovertemplate="<b>🅰️ ASSIST</b><br>%{text}<br>%{customdata}'<extra></extra>", customdata=df_ast['minute']))
+                # Affichage de la heatmap lissée
+                fig.add_trace(go.Contour(
+                    z=zi.reshape(xi.shape).T, # Transposer Z pour correspondre à la grille (x,y)
+                    x=np.linspace(0, length, xi.shape[0]),
+                    y=np.linspace(0, width, xi.shape[1]),
+                    colorscale='Plasma', # MODIFICATION ICI : Changement de la palette de couleurs
+                    opacity=0.9, # MODIFICATION ICI : Opacité légèrement augmentée
+                    showscale=False, # MODIFICATION ICI : Retire l'échelle de couleur
+                    contours=dict(showlines=False), # Ne pas afficher les lignes de contour
+                    hoverinfo='text', # MODIFICATION ICI : Active le hover
+                    hovertemplate='<b>Densité:</b> %{z:.2f}<extra></extra>' # MODIFICATION ICI : Template pour le hover
+                ))
+            except np.linalg.LinAlgError:
+                st.warning("Pas assez de données pour calculer une heatmap lissée. Affichage des points bruts.")
+                fig.add_trace(go.Scatter(
+                    x=x_coords, y=y_coords, mode='markers',
+                    marker=dict(size=8, color='red', opacity=0.7),
+                    name="Actions",
+                    hoverinfo='text',
+                    text=[f"Action à ({x:.1f}, {y:.1f})" for x,y in zip(x_coords, y_coords)]
+                ))
+        elif len(x_coords) > 0: # Si 1 seul point ou très peu, on affiche juste les points
+            fig.add_trace(go.Scatter(
+                x=x_coords, y=y_coords, mode='markers',
+                marker=dict(size=8, color='red', opacity=0.7),
+                name="Actions",
+                hoverinfo='text',
+                text=[f"Action à ({x:.1f}, {y:.1f})" for x,y in zip(x_coords, y_coords)]
+            ))
+        else:
+            st.warning(f"Aucune action avec des coordonnées valides trouvée pour {player_name} pour générer la heatmap.")
 
-    st.plotly_chart(fig, use_container_width=True)
+        # Ajouter le terrain
+        for shape in shapes:
+            fig.add_shape(shape)
+        
+        # Ajouter le logo si besoin
+        logo_base64 = get_local_logo()
+        if logo_base64:
+            fig.add_layout_image(dict(
+                source=logo_base64, xref="x", yref="y", x=2, y=2, sizex=12, sizey=12,
+                opacity=0.3, layer="below", sizing="contain", xanchor="left", yanchor="bottom"
+            ))
 
-    st.markdown('<div class="site-footer">Data Visualization by @alex8841t</div>', unsafe_allow_html=True)
+        fig.add_annotation(
+            text="<i>Viz by @alex8841t</i>",
+            xref="x", yref="y", x=length - 2, y=2, showarrow=False,
+            xanchor="right", yanchor="bottom",
+            font=dict(color="rgba(255,255,255,0.6)", size=16, family="Georgia")
+        )
+
+        fig.update_layout(
+            plot_bgcolor="#1e1e1e", paper_bgcolor="#1e1e1e",
+            xaxis=dict(visible=False, range=[-1, length+1], fixedrange=True),
+            yaxis=dict(visible=False, range=[-1, width+1], fixedrange=True, scaleanchor="x", scaleratio=1),
+            margin=dict(l=5, r=5, t=40, b=5),
+            height=800,
+            title=f"Heatmap des actions de {player_name}" # Titre légèrement simplifié
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown('<div class="site-footer">Data Visualization by @alex8841t</div>', unsafe_allow_html=True)
+
+    else: # viz_type == "Pass Map"
+        df_viz = df_p.copy()
+        if f_success: df_viz = df_viz[df_viz['outcomeType'] == 'Successful']
+        if f_prog: df_viz = df_viz[df_viz['is_progressive']]
+
+        receivers = []
+        for i, row in df_viz.iterrows():
+            try:
+                # Trouver l'action suivante dans le DataFrame original (df), pas df_viz
+                # Utiliser l'index original pour trouver la ligne suivante
+                original_idx = df.index.get_loc(i)
+                if original_idx + 1 < len(df):
+                    nxt = df.iloc[original_idx + 1]
+                    receivers.append(nxt['name'] if nxt['teamId'] == row['teamId'] else "Perte")
+                else:
+                    receivers.append("-") # Fin du match ou dernière action
+            except Exception:
+                receivers.append("-") # Gérer les erreurs d'indexation
+        df_viz['receiver'] = receivers
+        
+        layout = go.Layout(
+            shapes=shapes,
+            plot_bgcolor="#1e1e1e", paper_bgcolor="#1e1e1e",
+            xaxis=dict(visible=False, range=[-1, length+1], fixedrange=True),
+            yaxis=dict(visible=False, range=[-1, width+1], fixedrange=True, scaleanchor="x", scaleratio=1),
+            margin=dict(l=5, r=5, t=40, b=5),
+            height=800, 
+            showlegend=True,
+            legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center", font=dict(color="white"), bgcolor="rgba(0,0,0,0)", itemclick=False, itemdoubleclick=False),
+            title=f"Pass Map de {player_name}"
+        )
+        
+        fig = go.Figure(layout=layout)
+        
+        logo_base64 = get_local_logo()
+        if logo_base64:
+            fig.add_layout_image(dict(
+                source=logo_base64, xref="x", yref="y", x=2, y=2, sizex=12, sizey=12,
+                opacity=0.3, layer="below", sizing="contain", xanchor="left", yanchor="bottom"
+            ))
+
+        fig.add_annotation(
+            text="<i>Viz by @alex8841t</i>",
+            xref="x", yref="y", x=length - 2, y=2, showarrow=False,
+            xanchor="right", yanchor="bottom",
+            font=dict(color="rgba(255,255,255,0.6)", size=16, family="Georgia")
+        )
+
+        # TRACES : On utilise endX / endY pour les marqueurs
+        df_no = df_viz[df_viz['outcomeType'] != 'Successful']
+        df_ok = df_viz[df_viz['outcomeType'] == 'Successful']
+        df_ast = df_ok[df_ok['is_assist']]
+        df_kp = df_ok[df_ok['is_keypass']]
+        df_nrm = df_ok[~df_ok['is_assist'] & ~df_ok['is_keypass']]
+
+        # Ratées
+        if not df_no.empty:
+            for _, r in df_no.iterrows():
+                fig.add_trace(go.Scatter(x=[r['x'], r['endX']], y=[r['y'], r['endY']], mode='lines', line=dict(color='#ef553b', width=1, dash='dot'), opacity=0.5, showlegend=False, hoverinfo='skip'))
+            fig.add_trace(go.Scatter(x=df_no['endX'], y=df_no['endY'], mode='markers', name='Ratées', marker=dict(size=6, color='#1e1e1e', symbol='x', line=dict(width=1, color='#ef553b')), text=df_no['receiver'], hovertemplate="<b>Perte</b><br>%{customdata}'<extra></extra>", customdata=df_no['minute']))
+        
+        # Normales
+        if not df_nrm.empty:
+            for _, r in df_nrm.iterrows():
+                fig.add_trace(go.Scatter(x=[r['x'], r['endX']], y=[r['y'], r['endY']], mode='lines', line=dict(color='#00cc96', width=2), opacity=0.6, showlegend=False, hoverinfo='skip'))
+            fig.add_trace(go.Scatter(x=df_nrm['endX'], y=df_nrm['endY'], mode='markers', name='Réussies', marker=dict(size=6, color='#1e1e1e', line=dict(width=1, color='#00cc96')), text=df_nrm['receiver'], hovertemplate="<b>%{text}</b><br>%{customdata}'<extra></extra>", customdata=df_nrm['minute']))
+        
+        # Clés
+        if not df_kp.empty:
+            for _, r in df_kp.iterrows():
+                fig.add_trace(go.Scatter(x=[r['x'], r['endX']], y=[r['y'], r['endY']], mode='lines', line=dict(color='#FFD700', width=3), opacity=0.9, showlegend=False, hoverinfo='skip'))
+            fig.add_trace(go.Scatter(x=df_kp['endX'], y=df_kp['endY'], mode='markers', name='Passes Clés', marker=dict(size=10, color='#FFD700', symbol='star', line=dict(width=1, color='white')), text=df_kp['receiver'], hovertemplate="<b>🔑 Clé</b><br>%{text}<br>%{customdata}'<extra></extra>", customdata=df_kp['minute']))
+        
+        # Décisives
+        if not df_ast.empty:
+            for _, r in df_ast.iterrows():
+                fig.add_trace(go.Scatter(x=[r['x'], r['endX']], y=[r['y'], r['endY']], mode='lines', line=dict(color='#00BFFF', width=4), opacity=1, showlegend=False, hoverinfo='skip'))
+            fig.add_trace(go.Scatter(x=df_ast['endX'], y=df_ast['endY'], mode='markers', name='Assists', marker=dict(size=12, color='#00BFFF', symbol='diamond', line=dict(width=1, color='white')), text=df_ast['receiver'], hovertemplate="<b>🅰️ ASSIST</b><br>%{text}<br>%{customdata}'<extra></extra>", customdata=df_ast['minute']))
+
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown('<div class="site-footer">Data Visualization by @alex8841t</div>', unsafe_allow_html=True)
