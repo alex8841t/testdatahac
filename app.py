@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.colors as pc # Import ajouté pour les couleurs Plotly
 import os
 import base64
 import numpy as np
-from scipy.stats import gaussian_kde # Import ajouté pour la heatmap lissée
+from scipy.stats import gaussian_kde
 
 st.set_page_config(page_title="Analyse HAC", layout="wide")
 
@@ -23,7 +24,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. CONFIGURATION ROBUSTE (Compatible Cloud & Local) ---
-import os
 
 # Récupère le dossier où se trouve physiquement le fichier app.py
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -206,23 +206,28 @@ if df is not None and player_name: # S'assure que df et player_name sont défini
             
             # Calcul de la densité
             try:
-                # MODIFICATION ICI : bw_method ajusté pour moins de flou.
-                # Tu peux expérimenter avec des valeurs comme 0.05, 0.08, 0.12, etc.
-                # 0.1 est un bon compromis pour un rendu plus net.
-                kde = gaussian_kde(np.vstack([x_coords, y_coords]), bw_method=0.2) 
+                kde = gaussian_kde(np.vstack([x_coords, y_coords]), bw_method=0.15) 
                 zi = kde(np.vstack([xi.flatten(), yi.flatten()]))
+
+                # --- DÉBUT DE LA MODIFICATION POUR LA COLORSCALE (Bleu marine HAC vers Bleu ciel) ---
+                custom_hac_colorscale = [
+                    [0.0, 'rgba(1,3,34,1)'],   # Bleu marine HAC transparent pour les valeurs faibles
+                    [0.09, 'rgb(1,3,34)'],    # Bleu marine HAC (début du dégradé)
+                    [0.5, 'rgb(0,123,255)'],     # Bleu intermédiaire (ex: bleu "HAC" plus clair)
+                    [1.0, 'rgb(173,216,230)']    # Bleu ciel (fin, ex: LightBlue)
+                ]
+                # --- FIN DE LA MODIFICATION POUR LA COLORSCALE ---
 
                 # Affichage de la heatmap lissée
                 fig.add_trace(go.Contour(
                     z=zi.reshape(xi.shape).T, # Transposer Z pour correspondre à la grille (x,y)
                     x=np.linspace(0, length, xi.shape[0]),
                     y=np.linspace(0, width, xi.shape[1]),
-                    colorscale='Plasma', # MODIFICATION ICI : Changement de la palette de couleurs
-                    opacity=0.9, # MODIFICATION ICI : Opacité légèrement augmentée
-                    showscale=False, # MODIFICATION ICI : Retire l'échelle de couleur
+                    colorscale=custom_hac_colorscale, # Utilisation de la colorscale personnalisée
+                    opacity=0.9, # Opacité générale de la couche de contour
+                    showscale=False, # Retire l'échelle de couleur
+                    hoverinfo='skip',
                     contours=dict(showlines=False), # Ne pas afficher les lignes de contour
-                    hoverinfo='text', # MODIFICATION ICI : Active le hover
-                    hovertemplate='<b>Densité:</b> %{z:.2f}<extra></extra>' # MODIFICATION ICI : Template pour le hover
                 ))
             except np.linalg.LinAlgError:
                 st.warning("Pas assez de données pour calculer une heatmap lissée. Affichage des points bruts.")
@@ -230,16 +235,12 @@ if df is not None and player_name: # S'assure que df et player_name sont défini
                     x=x_coords, y=y_coords, mode='markers',
                     marker=dict(size=8, color='red', opacity=0.7),
                     name="Actions",
-                    hoverinfo='text',
-                    text=[f"Action à ({x:.1f}, {y:.1f})" for x,y in zip(x_coords, y_coords)]
                 ))
         elif len(x_coords) > 0: # Si 1 seul point ou très peu, on affiche juste les points
             fig.add_trace(go.Scatter(
                 x=x_coords, y=y_coords, mode='markers',
                 marker=dict(size=8, color='red', opacity=0.7),
                 name="Actions",
-                hoverinfo='text',
-                text=[f"Action à ({x:.1f}, {y:.1f})" for x,y in zip(x_coords, y_coords)]
             ))
         else:
             st.warning(f"Aucune action avec des coordonnées valides trouvée pour {player_name} pour générer la heatmap.")
@@ -264,7 +265,7 @@ if df is not None and player_name: # S'assure que df et player_name sont défini
         )
 
         fig.update_layout(
-            plot_bgcolor="#1e1e1e", paper_bgcolor="#1e1e1e",
+            plot_bgcolor="#010322", paper_bgcolor="#010322", # Fond bleu marine HAC
             xaxis=dict(visible=False, range=[-1, length+1], fixedrange=True),
             yaxis=dict(visible=False, range=[-1, width+1], fixedrange=True, scaleanchor="x", scaleratio=1),
             margin=dict(l=5, r=5, t=40, b=5),
@@ -296,7 +297,7 @@ if df is not None and player_name: # S'assure que df et player_name sont défini
         
         layout = go.Layout(
             shapes=shapes,
-            plot_bgcolor="#1e1e1e", paper_bgcolor="#1e1e1e",
+            plot_bgcolor="#010322", paper_bgcolor="#010322", # Fond bleu marine HAC
             xaxis=dict(visible=False, range=[-1, length+1], fixedrange=True),
             yaxis=dict(visible=False, range=[-1, width+1], fixedrange=True, scaleanchor="x", scaleratio=1),
             margin=dict(l=5, r=5, t=40, b=5),
@@ -355,4 +356,3 @@ if df is not None and player_name: # S'assure que df et player_name sont défini
 
         st.plotly_chart(fig, use_container_width=True)
         st.markdown('<div class="site-footer">Data Visualization by @alex8841t</div>', unsafe_allow_html=True)
-
