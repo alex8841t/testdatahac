@@ -20,8 +20,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 1. CONFIGURATION ---
-DATA_FOLDER = r'.\data'
+# --- 1. CONFIGURATION ROBUSTE (Compatible Cloud & Local) ---
+import os
+
+# Récupère le dossier où se trouve physiquement le fichier app.py
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Construit le chemin vers le dossier 'data' situé au même endroit que app.py
+# Cela marche sur Windows, Mac et Linux (Streamlit Cloud)
+DATA_FOLDER = os.path.join(current_dir, 'data')
 
 def get_available_files():
     if not os.path.exists(DATA_FOLDER):
@@ -183,7 +190,7 @@ if df is not None:
         text="<i>Viz by @alex8841t</i>",
         xref="x", yref="y", x=length - 2, y=2, showarrow=False,
         xanchor="right", yanchor="bottom",
-        font=dict(color="rgba(255,255,255,0.6)", size=16, family="Georgia")
+        font=dict(color="rgba(255,255,255,0.6)", size=16, family="Montserrat")
     )
 
     # TRACES : On utilise endX / endY pour les marqueurs
@@ -218,4 +225,5 @@ if df is not None:
         fig.add_trace(go.Scatter(x=df_ast['endX'], y=df_ast['endY'], mode='markers', name='Assists', marker=dict(size=12, color='#00BFFF', symbol='diamond', line=dict(width=1, color='white')), text=df_ast['receiver'], hovertemplate="<b>🅰️ ASSIST</b><br>%{text}<br>%{customdata}'<extra></extra>", customdata=df_ast['minute']))
 
     st.plotly_chart(fig, use_container_width=True)
+
     st.markdown('<div class="site-footer">Data Visualization by @alex8841t</div>', unsafe_allow_html=True)
