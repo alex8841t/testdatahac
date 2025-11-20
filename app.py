@@ -21,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. CONFIGURATION ---
-DATA_FOLDER = r'.\data'
+DATA_FOLDER = '.\data'
 
 def get_available_files():
     if not os.path.exists(DATA_FOLDER):
@@ -220,3 +220,4 @@ if df is not None:
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown('<div class="site-footer">Data Visualization by @alex8841t</div>', unsafe_allow_html=True)
+
