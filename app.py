@@ -269,7 +269,7 @@ if df is not None and player_name: # S'assure que df et player_name sont défini
             xaxis=dict(visible=False, range=[-1, length+1], fixedrange=True),
             yaxis=dict(visible=False, range=[-1, width+1], fixedrange=True, scaleanchor="x", scaleratio=1),
             margin=dict(l=5, r=5, t=40, b=5),
-            height=800,
+            height=700,
             title=f"Heatmap des actions de {player_name}" # Titre légèrement simplifié
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -301,7 +301,7 @@ if df is not None and player_name: # S'assure que df et player_name sont défini
             xaxis=dict(visible=False, range=[-1, length+1], fixedrange=True),
             yaxis=dict(visible=False, range=[-1, width+1], fixedrange=True, scaleanchor="x", scaleratio=1),
             margin=dict(l=5, r=5, t=40, b=5),
-            height=800, 
+            height=700, 
             showlegend=True,
             legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center", font=dict(color="white"), bgcolor="rgba(0,0,0,0)", itemclick=False, itemdoubleclick=False),
             title=f"Pass Map de {player_name}"
@@ -356,3 +356,4 @@ if df is not None and player_name: # S'assure que df et player_name sont défini
 
         st.plotly_chart(fig, use_container_width=True)
         st.markdown('<div class="site-footer">Data Visualization by @alex8841t</div>', unsafe_allow_html=True)
+
